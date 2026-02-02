@@ -242,16 +242,14 @@ function App() {
             <table>
               <thead><tr>
                 <th onClick={() => handleSort('nome')} className="sortable">Restaurante <ArrowUpDown size={14} /></th>
-                <th>ID</th>
-                <th onClick={() => handleSort('itens_geraldo')} className="sortable">Itens G <ArrowUpDown size={14} /></th>
-                <th onClick={() => handleSort('itens_ifood')} className="sortable">Itens iF <ArrowUpDown size={14} /></th>
+                <th onClick={() => handleSort('itens_geraldo')} className="sortable">Itens Geraldo <ArrowUpDown size={14} /></th>
+                <th onClick={() => handleSort('itens_ifood')} className="sortable">Itens iFood <ArrowUpDown size={14} /></th>
                 <th>Status</th>
                 <th>Ações</th>
               </tr></thead>
               <tbody>{filteredRestaurantes.map(r => (
                 <tr key={r.id}>
-                  <td><div className="restaurant-name">{r.nome}</div></td>
-                  <td>{r.geraldo_id}</td>
+                  <td><div className="restaurant-name">{r.nome}</div><div className="restaurant-id">ID: {r.geraldo_id}</div></td>
                   <td><span className="badge badge-neutral">{r.itens_geraldo || 0}</span></td>
                   <td><span className="badge badge-neutral">{r.itens_ifood || 0}</span></td>
                   <td>{r.ifood_uuid ? <span className="badge badge-success"><CheckCircle size={12} /> OK</span> : <span className="badge badge-warning"><AlertTriangle size={12} /> Pendente</span>}</td>
