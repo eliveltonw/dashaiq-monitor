@@ -597,23 +597,40 @@ function App() {
             <div className="side-panel-content">
               <div className="side-panel-section">
                 <h4>Informações</h4>
-                <div className="expanded-list">
-                  <div className="expanded-item"><span>Geraldo ID</span><span className="expanded-item-value">{selectedRest.geraldo_id}</span></div>
-                  <div className="expanded-item"><span>iFood UUID</span><span className="expanded-item-value" style={{ fontSize: 11 }}>{selectedRest.ifood_uuid || 'Não vinculado'}</span></div>
-                  <div className="expanded-item"><span>Categorias</span><span className="expanded-item-value">{selectedRest.cats_geraldo} G / {selectedRest.cats_ifood} iF</span></div>
-                  <div className="expanded-item"><span>Itens</span><span className="expanded-item-value">{selectedRest.itens_geraldo} G / {selectedRest.itens_ifood} iF</span></div>
-                  <div className="expanded-item"><span>Saúde</span><span className="expanded-item-value">{selectedRest.health}/5</span></div>
+                <div className="info-grid">
+                  <div className="info-item">
+                    <div className="info-item-label">Geraldo ID</div>
+                    <div className="info-item-value">{selectedRest.geraldo_id}</div>
+                  </div>
+                  <div className="info-item">
+                    <div className="info-item-label">Saúde</div>
+                    <div className="info-item-value">{selectedRest.health}/5</div>
+                  </div>
+                  <div className="info-item">
+                    <div className="info-item-label">Categorias</div>
+                    <div className="info-item-value">{selectedRest.cats_geraldo} G / {selectedRest.cats_ifood} iF</div>
+                  </div>
+                  <div className="info-item">
+                    <div className="info-item-label">Itens</div>
+                    <div className="info-item-value">{selectedRest.itens_geraldo} G / {selectedRest.itens_ifood} iF</div>
+                  </div>
+                </div>
+                <div className="info-item" style={{ marginBottom: 0 }}>
+                  <div className="info-item-label">iFood UUID</div>
+                  <div className="info-item-value" style={{ fontSize: 11 }}>{selectedRest.ifood_uuid || 'Não vinculado'}</div>
                 </div>
               </div>
 
               <div className="side-panel-section">
-                <h4>Últimos Itens ({panelItens.length})</h4>
-                <div className="expanded-list">
+                <h4>Itens ({panelItens.length})</h4>
+                <div className="items-list">
                   {panelItens.map(i => (
-                    <div key={i.id} className="expanded-item">
-                      <span className={`badge badge-sm ${i.origem === 'geraldo' ? 'badge-info' : 'badge-danger'}`} style={{ marginRight: 8 }}>{i.origem?.charAt(0).toUpperCase()}</span>
-                      <span className="expanded-item-name" style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{i.nome}</span>
-                      <span className="expanded-item-value">R$ {i.preco?.toFixed(2)}</span>
+                    <div key={i.id} className="item-row">
+                      <div className="item-row-origem">
+                        <span className={`badge badge-sm ${i.origem === 'geraldo' ? 'badge-info' : 'badge-danger'}`}>{i.origem === 'geraldo' ? 'G' : 'iF'}</span>
+                      </div>
+                      <div className="item-row-nome" title={i.nome}>{i.nome}</div>
+                      <div className="item-row-preco">R$ {i.preco?.toFixed(2) || '0.00'}</div>
                     </div>
                   ))}
                 </div>
