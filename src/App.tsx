@@ -1,49 +1,86 @@
-import { useState, useEffect } from 'react'
-import { supabase } from './lib/supabase'
+import { useState, useEffect, useMemo } from 'react'
 import './index.css'
 
-// ==================== TYPES ====================
+// ==================== CONFIG SUPABASE ====================
+const API = 'https://xkbivbtvoyqnshqcyrol.supabase.co/rest/v1'
+const KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhrYml2YnR2b3lxbnNocWN5cm9sIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc2OTkyMjQ1OCwiZXhwIjoyMDg1NDk4NDU4fQ.rqqPur_g_Sh_OY3vns8G8zfCBiG0cshPRqNHQP7qzdg'
+
+const headers = {
+  'apikey': KEY,
+  'Authorization': `Bearer ${KEY}`,
+  'Content-Type': 'application/json'
+}
+
+async function query(table: string, params = '') {
+  const res = await fetch(`${API}/${table}${params}`, { headers })
+  return res.json()
+}
+
+// ==================== TYPES (ESTRUTURA REAL DO BANCO) ====================
 interface Restaurante {
   id: number
   geraldo_id: number
-  nome: string
   ifood_uuid: string | null
+  nome: string
+  avatar_url: string | null
+  telefones: string | null
+  celulares: string | null
   geraldo_link: string | null
   vitrine_link: string | null
   // Computed
-  total_cats: number
-  total_itens: number
-  sem_foto: number
-  sem_desc: number
-  sem_preco: number
+  total_cats?: number
+  total_itens?: number
+  sem_foto?: number
+  sem_desc?: number
+  sem_preco?: number
 }
 
 interface Categoria {
   id: number
+  restaurante_id: number
+  origem: 'geraldo' | 'ifood'
+  origem_id: string | null
   nome: string
-  origem: string
-  total_itens: number
-  sem_foto: number
-  sem_desc: number
-  sem_preco: number
+  status: number
+  // Computed
+  total_itens?: number
+  sem_foto?: number
+  sem_desc?: number
+  sem_preco?: number
 }
 
 interface Item {
   id: number
+  categoria_id: number
+  origem_id: string | null
   nome: string
   descricao: string | null
   imagem_url: string | null
-  origem: string
-  origem_id: string | null
-  categoria_id: number
-  categoria_nome: string
+  // Computed
+  categoria_nome?: string
+  restaurante_id?: number
+  restaurante_nome?: string
+  precos?: Preco[]
+  sem_foto?: boolean
+  sem_desc?: boolean
+  sem_preco?: boolean
+}
+
+interface Preco {
+  id: number
+  item_id: number
+  tamanho_nome: string | null
+  valor: number | null
+}
+
+interface ItemMatch {
+  id: number
   restaurante_id: number
-  restaurante_nome: string
-  precos: { valor: number | null; tamanho_nome: string | null }[]
-  // Flags
-  sem_foto: boolean
-  sem_desc: boolean
-  sem_preco: boolean
+  item_geraldo_id: number
+  item_ifood_id: number | null
+  confianca: number
+  status: string
+  match_por: string | null
 }
 
 type View = 'home' | 'restaurante' | 'itens'
@@ -55,19 +92,12 @@ function App() {
   const [view, setView] = useState<View>('home')
   const [selectedRestId, setSelectedRestId] = useState<number | null>(null)
   
-  function navigateTo(v: View, restId?: number) {
-    setView(v)
-    if (restId) setSelectedRestId(restId)
-  }
-
   return (
     <div className="app">
-      <Sidebar view={view} onNavigate={navigateTo} />
+      <Sidebar view={view} onNavigate={(v) => { setView(v); if (v === 'home') setSelectedRestId(null) }} />
       <main className="main">
-        {view === 'home' && <HomePage onSelectRest={(id) => navigateTo('restaurante', id)} />}
-        {view === 'restaurante' && selectedRestId && (
-          <RestaurantePage restId={selectedRestId} onBack={() => navigateTo('home')} />
-        )}
+        {view === 'home' && <HomePage onSelectRest={(id) => { setSelectedRestId(id); setView('restaurante') }} />}
+        {view === 'restaurante' && selectedRestId && <RestaurantePage restId={selectedRestId} onBack={() => setView('home')} />}
         {view === 'itens' && <ItensPage />}
       </main>
     </div>
@@ -96,7 +126,7 @@ function Sidebar({ view, onNavigate }: { view: View; onNavigate: (v: View) => vo
         </div>
       </nav>
       <div className="sidebar-footer">
-        <div className="status">🟢 Conectado</div>
+        <div className="status">🟢 Conectado ao Supabase</div>
       </div>
     </aside>
   )
@@ -105,84 +135,97 @@ function Sidebar({ view, onNavigate }: { view: View; onNavigate: (v: View) => vo
 // ==================== HOME PAGE ====================
 function HomePage({ onSelectRest }: { onSelectRest: (id: number) => void }) {
   const [restaurantes, setRestaurantes] = useState<Restaurante[]>([])
+  const [categorias, setCategorias] = useState<Categoria[]>([])
+  const [itens, setItens] = useState<Item[]>([])
+  const [precos, setPrecos] = useState<Preco[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState<'todos' | 'com_problema' | 'sem_ifood'>('todos')
-  const [stats, setStats] = useState({ total: 0, sem_ifood: 0, sem_foto: 0, sem_desc: 0, sem_preco: 0 })
 
   useEffect(() => { loadData() }, [])
 
   async function loadData() {
     setLoading(true)
-    
-    // Carregar restaurantes
-    const { data: rests } = await supabase.from('restaurantes').select('*').order('nome')
-    
-    // Carregar categorias e itens para calcular stats
-    const { data: cats } = await supabase.from('categorias').select('id, restaurante_id, origem')
-    const { data: itens } = await supabase.from('itens').select('id, nome, descricao, imagem_url, categoria_id, categorias!inner(restaurante_id, origem)').eq('categorias.origem', 'geraldo')
-    const { data: precos } = await supabase.from('precos').select('item_id, valor')
-
-    // Mapear preços por item
-    const precoMap = new Map<number, number[]>()
-    precos?.forEach(p => {
-      if (!precoMap.has(p.item_id)) precoMap.set(p.item_id, [])
-      if (p.valor != null) precoMap.get(p.item_id)!.push(p.valor)
-    })
-
-    // Calcular stats por restaurante
-    const restMap = new Map<number, Restaurante>()
-    rests?.forEach(r => {
-      restMap.set(r.id, {
-        ...r,
-        total_cats: 0,
-        total_itens: 0,
-        sem_foto: 0,
-        sem_desc: 0,
-        sem_preco: 0
-      })
-    })
-
-    // Contar categorias
-    cats?.filter(c => c.origem === 'geraldo').forEach(c => {
-      const r = restMap.get(c.restaurante_id)
-      if (r) r.total_cats++
-    })
-
-    // Contar itens e flags
-    itens?.forEach((i: any) => {
-      const restId = i.categorias?.restaurante_id
-      const r = restMap.get(restId)
-      if (r) {
-        r.total_itens++
-        if (!i.imagem_url) r.sem_foto++
-        if (!i.descricao || i.descricao.trim() === '') r.sem_desc++
-        const itemPrecos = precoMap.get(i.id) || []
-        if (itemPrecos.length === 0) r.sem_preco++
-      }
-    })
-
-    const lista = Array.from(restMap.values())
-    setRestaurantes(lista)
-    
-    // Stats globais
-    setStats({
-      total: lista.length,
-      sem_ifood: lista.filter(r => !r.ifood_uuid).length,
-      sem_foto: lista.reduce((acc, r) => acc + r.sem_foto, 0),
-      sem_desc: lista.reduce((acc, r) => acc + r.sem_desc, 0),
-      sem_preco: lista.reduce((acc, r) => acc + r.sem_preco, 0)
-    })
-    
+    try {
+      const [rests, cats, items, prices] = await Promise.all([
+        query('restaurantes', '?order=nome'),
+        query('categorias', '?origem=eq.geraldo'),
+        query('itens'),
+        query('precos')
+      ])
+      setRestaurantes(rests || [])
+      setCategorias(cats || [])
+      setItens(items || [])
+      setPrecos(prices || [])
+    } catch (e) {
+      console.error(e)
+    }
     setLoading(false)
   }
 
+  // Calcular stats por restaurante
+  const restComStats = useMemo(() => {
+    const catMap = new Map<number, number[]>() // rest_id -> [cat_ids]
+    categorias.forEach(c => {
+      if (!catMap.has(c.restaurante_id)) catMap.set(c.restaurante_id, [])
+      catMap.get(c.restaurante_id)!.push(c.id)
+    })
+
+    const itemsByCat = new Map<number, Item[]>()
+    itens.forEach(i => {
+      if (!itemsByCat.has(i.categoria_id)) itemsByCat.set(i.categoria_id, [])
+      itemsByCat.get(i.categoria_id)!.push(i)
+    })
+
+    const precosByItem = new Map<number, Preco[]>()
+    precos.forEach(p => {
+      if (!precosByItem.has(p.item_id)) precosByItem.set(p.item_id, [])
+      precosByItem.get(p.item_id)!.push(p)
+    })
+
+    return restaurantes.map(r => {
+      const catIds = catMap.get(r.id) || []
+      const restItens: Item[] = []
+      catIds.forEach(catId => {
+        const catItems = itemsByCat.get(catId) || []
+        restItens.push(...catItems)
+      })
+
+      let sem_foto = 0, sem_desc = 0, sem_preco = 0
+      restItens.forEach(item => {
+        if (!item.imagem_url) sem_foto++
+        if (!item.descricao || item.descricao.trim() === '') sem_desc++
+        const itemPrecos = precosByItem.get(item.id) || []
+        const temPreco = itemPrecos.some(p => p.valor != null && p.valor > 0)
+        if (!temPreco) sem_preco++
+      })
+
+      return {
+        ...r,
+        total_cats: catIds.length,
+        total_itens: restItens.length,
+        sem_foto,
+        sem_desc,
+        sem_preco
+      }
+    })
+  }, [restaurantes, categorias, itens, precos])
+
+  // Stats globais
+  const stats = useMemo(() => ({
+    total: restComStats.length,
+    sem_ifood: restComStats.filter(r => !r.ifood_uuid).length,
+    sem_foto: restComStats.reduce((acc, r) => acc + (r.sem_foto || 0), 0),
+    sem_desc: restComStats.reduce((acc, r) => acc + (r.sem_desc || 0), 0),
+    sem_preco: restComStats.reduce((acc, r) => acc + (r.sem_preco || 0), 0)
+  }), [restComStats])
+
   // Filtrar
-  const filtered = restaurantes.filter(r => {
+  const filtered = restComStats.filter(r => {
     const matchSearch = r.nome.toLowerCase().includes(search.toLowerCase()) || r.geraldo_id.toString().includes(search)
     const matchFilter = filter === 'todos' ? true :
       filter === 'sem_ifood' ? !r.ifood_uuid :
-      (r.sem_foto > 0 || r.sem_desc > 0 || r.sem_preco > 0)
+      ((r.sem_foto || 0) > 0 || (r.sem_desc || 0) > 0 || (r.sem_preco || 0) > 0)
     return matchSearch && matchFilter
   })
 
@@ -222,13 +265,7 @@ function HomePage({ onSelectRest }: { onSelectRest: (id: number) => void }) {
 
       {/* Filtros */}
       <div className="filters">
-        <input 
-          type="text" 
-          className="search-input" 
-          placeholder="🔍 Buscar restaurante..." 
-          value={search} 
-          onChange={e => setSearch(e.target.value)} 
-        />
+        <input type="text" className="search-input" placeholder="🔍 Buscar restaurante..." value={search} onChange={e => setSearch(e.target.value)} />
         <div className="filter-chips">
           <span className={`chip ${filter === 'todos' ? 'active' : ''}`} onClick={() => setFilter('todos')}>Todos</span>
           <span className={`chip ${filter === 'com_problema' ? 'active' : ''}`} onClick={() => setFilter('com_problema')}>⚠️ Com Problema</span>
@@ -239,16 +276,20 @@ function HomePage({ onSelectRest }: { onSelectRest: (id: number) => void }) {
 
       {/* Lista */}
       {loading ? (
-        <div className="loading">Carregando...</div>
+        <div className="loading">Carregando dados do Supabase...</div>
       ) : (
         <div className="restaurant-grid">
           {filtered.map(r => (
             <div key={r.id} className="restaurant-card" onClick={() => onSelectRest(r.id)}>
               <div className="card-header">
-                <div className="card-avatar">{r.nome.charAt(0)}</div>
+                {r.avatar_url ? (
+                  <img src={r.avatar_url} alt="" className="card-avatar-img" />
+                ) : (
+                  <div className="card-avatar">{r.nome.charAt(0)}</div>
+                )}
                 <div className="card-info">
                   <div className="card-name">{r.nome}</div>
-                  <div className="card-id">ID: {r.geraldo_id}</div>
+                  <div className="card-id">Geraldo #{r.geraldo_id}</div>
                 </div>
                 {r.ifood_uuid ? <span className="badge badge-success">iFood ✓</span> : <span className="badge badge-danger">Sem iFood</span>}
               </div>
@@ -263,15 +304,15 @@ function HomePage({ onSelectRest }: { onSelectRest: (id: number) => void }) {
                   <span className="stat-label">Itens</span>
                 </div>
                 <div className="card-stat">
-                  <span className={`stat-value ${r.sem_foto > 0 ? 'red' : 'green'}`}>{r.sem_foto}</span>
+                  <span className={`stat-value ${(r.sem_foto || 0) > 0 ? 'red' : 'green'}`}>{r.sem_foto || 0}</span>
                   <span className="stat-label">s/ Foto</span>
                 </div>
                 <div className="card-stat">
-                  <span className={`stat-value ${r.sem_desc > 0 ? 'red' : 'green'}`}>{r.sem_desc}</span>
+                  <span className={`stat-value ${(r.sem_desc || 0) > 0 ? 'red' : 'green'}`}>{r.sem_desc || 0}</span>
                   <span className="stat-label">s/ Desc</span>
                 </div>
                 <div className="card-stat">
-                  <span className={`stat-value ${r.sem_preco > 0 ? 'red' : 'green'}`}>{r.sem_preco}</span>
+                  <span className={`stat-value ${(r.sem_preco || 0) > 0 ? 'red' : 'green'}`}>{r.sem_preco || 0}</span>
                   <span className="stat-label">s/ Preço</span>
                 </div>
               </div>
@@ -293,6 +334,8 @@ function RestaurantePage({ restId, onBack }: { restId: number; onBack: () => voi
   const [rest, setRest] = useState<Restaurante | null>(null)
   const [categorias, setCategorias] = useState<Categoria[]>([])
   const [itens, setItens] = useState<Item[]>([])
+  const [precos, setPrecos] = useState<Preco[]>([])
+  const [matches, setMatches] = useState<ItemMatch[]>([])
   const [loading, setLoading] = useState(true)
   const [tab, setTab] = useState<Tab>('monitor')
   const [selectedCat, setSelectedCat] = useState<number | null>(null)
@@ -303,78 +346,73 @@ function RestaurantePage({ restId, onBack }: { restId: number; onBack: () => voi
 
   async function loadRestaurante() {
     setLoading(true)
-    
-    // Restaurante
-    const { data: restData } = await supabase.from('restaurantes').select('*').eq('id', restId).single()
-    
-    // Categorias Geraldo
-    const { data: catsData } = await supabase.from('categorias').select('*').eq('restaurante_id', restId).eq('origem', 'geraldo').order('nome')
-    
-    // Itens Geraldo com preços
-    const { data: itensData } = await supabase.from('itens').select('*, categorias!inner(id, nome, restaurante_id, origem), precos(valor, tamanho_nome)')
-      .eq('categorias.restaurante_id', restId)
-      .eq('categorias.origem', 'geraldo')
-      .order('nome')
-    
-    // Processar itens
-    const processedItens: Item[] = (itensData || []).map((i: any) => {
-      const precos = i.precos || []
-      const temPreco = precos.some((p: any) => p.valor != null && p.valor > 0)
+    try {
+      const [restData, catsData, matchesData] = await Promise.all([
+        query('restaurantes', `?id=eq.${restId}`),
+        query('categorias', `?restaurante_id=eq.${restId}&origem=eq.geraldo&order=nome`),
+        query('item_matches', `?restaurante_id=eq.${restId}`)
+      ])
+      
+      setRest(restData?.[0] || null)
+      setCategorias(catsData || [])
+      setMatches(matchesData || [])
+      
+      // Buscar itens das categorias
+      if (catsData?.length > 0) {
+        const catIds = catsData.map((c: Categoria) => c.id).join(',')
+        const [itensData, precosData] = await Promise.all([
+          query('itens', `?categoria_id=in.(${catIds})`),
+          query('precos')
+        ])
+        setItens(itensData || [])
+        setPrecos(precosData || [])
+      }
+    } catch (e) {
+      console.error(e)
+    }
+    setLoading(false)
+  }
+
+  // Processar itens com flags
+  const itensComFlags = useMemo(() => {
+    const precosByItem = new Map<number, Preco[]>()
+    precos.forEach(p => {
+      if (!precosByItem.has(p.item_id)) precosByItem.set(p.item_id, [])
+      precosByItem.get(p.item_id)!.push(p)
+    })
+
+    const catMap = new Map(categorias.map(c => [c.id, c.nome]))
+
+    return itens.map(i => {
+      const itemPrecos = precosByItem.get(i.id) || []
+      const temPreco = itemPrecos.some(p => p.valor != null && p.valor > 0)
       return {
-        id: i.id,
-        nome: i.nome,
-        descricao: i.descricao,
-        imagem_url: i.imagem_url,
-        origem: 'geraldo',
-        origem_id: i.origem_id,
-        categoria_id: i.categorias?.id,
-        categoria_nome: i.categorias?.nome || '',
-        restaurante_id: restId,
-        restaurante_nome: restData?.nome || '',
-        precos,
+        ...i,
+        categoria_nome: catMap.get(i.categoria_id) || '',
+        precos: itemPrecos,
         sem_foto: !i.imagem_url,
         sem_desc: !i.descricao || i.descricao.trim() === '',
         sem_preco: !temPreco
       }
     })
+  }, [itens, precos, categorias])
 
-    // Calcular stats por categoria
-    const catMap = new Map<number, Categoria>()
-    catsData?.forEach(c => {
-      catMap.set(c.id, {
+  // Stats por categoria
+  const categoriasComStats = useMemo(() => {
+    return categorias.map(c => {
+      const catItens = itensComFlags.filter(i => i.categoria_id === c.id)
+      return {
         ...c,
-        total_itens: 0,
-        sem_foto: 0,
-        sem_desc: 0,
-        sem_preco: 0
-      })
-    })
-
-    processedItens.forEach(i => {
-      const cat = catMap.get(i.categoria_id)
-      if (cat) {
-        cat.total_itens++
-        if (i.sem_foto) cat.sem_foto++
-        if (i.sem_desc) cat.sem_desc++
-        if (i.sem_preco) cat.sem_preco++
+        total_itens: catItens.length,
+        sem_foto: catItens.filter(i => i.sem_foto).length,
+        sem_desc: catItens.filter(i => i.sem_desc).length,
+        sem_preco: catItens.filter(i => i.sem_preco).length
       }
     })
-
-    setRest({
-      ...restData,
-      total_cats: catsData?.length || 0,
-      total_itens: processedItens.length,
-      sem_foto: processedItens.filter(i => i.sem_foto).length,
-      sem_desc: processedItens.filter(i => i.sem_desc).length,
-      sem_preco: processedItens.filter(i => i.sem_preco).length
-    })
-    setCategorias(Array.from(catMap.values()))
-    setItens(processedItens)
-    setLoading(false)
-  }
+  }, [categorias, itensComFlags])
 
   // Filtrar itens
-  const filteredItens = itens.filter(i => {
+  const filteredItens = itensComFlags.filter(i => {
     const matchCat = selectedCat === null || i.categoria_id === selectedCat
     const matchSearch = i.nome.toLowerCase().includes(search.toLowerCase())
     const matchFilter = filter === 'todos' ? true :
@@ -384,15 +422,16 @@ function RestaurantePage({ restId, onBack }: { restId: number; onBack: () => voi
     return matchCat && matchSearch && matchFilter
   })
 
-  // Stats do filtro atual
-  const filterStats = {
-    total: filteredItens.length,
-    sem_foto: filteredItens.filter(i => i.sem_foto).length,
-    sem_desc: filteredItens.filter(i => i.sem_desc).length,
-    sem_preco: filteredItens.filter(i => i.sem_preco).length
-  }
+  // Stats do restaurante
+  const restStats = useMemo(() => ({
+    total_cats: categorias.length,
+    total_itens: itensComFlags.length,
+    sem_foto: itensComFlags.filter(i => i.sem_foto).length,
+    sem_desc: itensComFlags.filter(i => i.sem_desc).length,
+    sem_preco: itensComFlags.filter(i => i.sem_preco).length
+  }), [categorias, itensComFlags])
 
-  if (loading) return <div className="loading">Carregando...</div>
+  if (loading) return <div className="loading">Carregando restaurante...</div>
   if (!rest) return <div className="error">Restaurante não encontrado</div>
 
   return (
@@ -401,9 +440,12 @@ function RestaurantePage({ restId, onBack }: { restId: number; onBack: () => voi
       <header className="page-header">
         <div className="header-left">
           <button className="btn btn-ghost" onClick={onBack}>← Voltar</button>
-          <div>
-            <h2>{rest.nome}</h2>
-            <p>ID: {rest.geraldo_id}</p>
+          <div className="header-rest">
+            {rest.avatar_url && <img src={rest.avatar_url} alt="" className="header-avatar" />}
+            <div>
+              <h2>{rest.nome}</h2>
+              <p>Geraldo #{rest.geraldo_id} {rest.ifood_uuid && `• iFood: ${rest.ifood_uuid.slice(0,8)}...`}</p>
+            </div>
           </div>
         </div>
         <div className="header-links">
@@ -412,42 +454,41 @@ function RestaurantePage({ restId, onBack }: { restId: number; onBack: () => voi
         </div>
       </header>
 
-      {/* KPIs do Restaurante */}
+      {/* KPIs */}
       <div className="kpi-row small">
-        <div className="kpi"><div className="kpi-value">{rest.total_cats}</div><div className="kpi-label">Categorias</div></div>
-        <div className="kpi"><div className="kpi-value">{rest.total_itens}</div><div className="kpi-label">Itens</div></div>
-        <div className={`kpi ${filter === 'sem_foto' ? 'active' : ''}`} onClick={() => setFilter(filter === 'sem_foto' ? 'todos' : 'sem_foto')}>
-          <div className={`kpi-value ${rest.sem_foto > 0 ? 'red' : 'green'}`}>{rest.sem_foto}</div><div className="kpi-label">Sem Foto</div>
+        <div className="kpi"><div className="kpi-value">{restStats.total_cats}</div><div className="kpi-label">Categorias</div></div>
+        <div className="kpi"><div className="kpi-value">{restStats.total_itens}</div><div className="kpi-label">Itens</div></div>
+        <div className={`kpi ${filter === 'sem_foto' ? 'active' : ''}`} onClick={() => setFilter(f => f === 'sem_foto' ? 'todos' : 'sem_foto')}>
+          <div className={`kpi-value ${restStats.sem_foto > 0 ? 'red' : 'green'}`}>{restStats.sem_foto}</div><div className="kpi-label">Sem Foto</div>
         </div>
-        <div className={`kpi ${filter === 'sem_desc' ? 'active' : ''}`} onClick={() => setFilter(filter === 'sem_desc' ? 'todos' : 'sem_desc')}>
-          <div className={`kpi-value ${rest.sem_desc > 0 ? 'red' : 'green'}`}>{rest.sem_desc}</div><div className="kpi-label">Sem Desc</div>
+        <div className={`kpi ${filter === 'sem_desc' ? 'active' : ''}`} onClick={() => setFilter(f => f === 'sem_desc' ? 'todos' : 'sem_desc')}>
+          <div className={`kpi-value ${restStats.sem_desc > 0 ? 'red' : 'green'}`}>{restStats.sem_desc}</div><div className="kpi-label">Sem Desc</div>
         </div>
-        <div className={`kpi ${filter === 'sem_preco' ? 'active' : ''}`} onClick={() => setFilter(filter === 'sem_preco' ? 'todos' : 'sem_preco')}>
-          <div className={`kpi-value ${rest.sem_preco > 0 ? 'red' : 'green'}`}>{rest.sem_preco}</div><div className="kpi-label">Sem Preço</div>
+        <div className={`kpi ${filter === 'sem_preco' ? 'active' : ''}`} onClick={() => setFilter(f => f === 'sem_preco' ? 'todos' : 'sem_preco')}>
+          <div className={`kpi-value ${restStats.sem_preco > 0 ? 'red' : 'green'}`}>{restStats.sem_preco}</div><div className="kpi-label">Sem Preço</div>
         </div>
       </div>
 
       {/* Tabs */}
       <div className="tabs">
         <div className={`tab ${tab === 'monitor' ? 'active' : ''}`} onClick={() => setTab('monitor')}>⭐ Monitor Geraldo</div>
-        <div className={`tab ${tab === 'itens' ? 'active' : ''}`} onClick={() => setTab('itens')}>📦 Itens</div>
+        <div className={`tab ${tab === 'itens' ? 'active' : ''}`} onClick={() => setTab('itens')}>📦 Itens ({restStats.total_itens})</div>
         <div className={`tab ${tab === 'ifood' ? 'active' : ''}`} onClick={() => setTab('ifood')}>🍔 iFood (Preencher)</div>
-        <div className={`tab ${tab === 'matches' ? 'active' : ''}`} onClick={() => setTab('matches')}>🔗 Matches</div>
+        <div className={`tab ${tab === 'matches' ? 'active' : ''}`} onClick={() => setTab('matches')}>🔗 Matches ({matches.length})</div>
       </div>
 
-      {/* Tab Content */}
+      {/* Tab: Monitor Geraldo */}
       {tab === 'monitor' && (
         <div className="monitor-layout">
-          {/* Categorias */}
           <div className="categories-panel">
             <div className="panel-header">Categorias</div>
             <div className={`category-item ${selectedCat === null ? 'active' : ''}`} onClick={() => setSelectedCat(null)}>
               <span>Todas</span>
-              <span className="cat-count">{itens.length}</span>
+              <span className="cat-count">{itensComFlags.length}</span>
             </div>
-            {categorias.map(c => (
+            {categoriasComStats.map(c => (
               <div key={c.id} className={`category-item ${selectedCat === c.id ? 'active' : ''}`} onClick={() => setSelectedCat(c.id)}>
-                <span>{c.nome}</span>
+                <span className="cat-name">{c.nome}</span>
                 <div className="cat-badges">
                   {c.sem_foto > 0 && <span className="mini-badge red">{c.sem_foto}📷</span>}
                   {c.sem_desc > 0 && <span className="mini-badge orange">{c.sem_desc}📝</span>}
@@ -458,18 +499,17 @@ function RestaurantePage({ restId, onBack }: { restId: number; onBack: () => voi
             ))}
           </div>
 
-          {/* Itens */}
           <div className="items-panel">
             <div className="panel-header">
-              <span>Itens ({filterStats.total})</span>
-              <input type="text" className="search-input small" placeholder="🔍 Buscar item..." value={search} onChange={e => setSearch(e.target.value)} />
+              <span>Itens ({filteredItens.length})</span>
+              <input type="text" className="search-input small" placeholder="🔍 Buscar..." value={search} onChange={e => setSearch(e.target.value)} />
             </div>
             
             <div className="filter-chips small">
-              <span className={`chip ${filter === 'todos' ? 'active' : ''}`} onClick={() => setFilter('todos')}>Todos ({filterStats.total})</span>
-              <span className={`chip ${filter === 'sem_foto' ? 'active' : ''}`} onClick={() => setFilter('sem_foto')}>📷 Sem Foto ({filterStats.sem_foto})</span>
-              <span className={`chip ${filter === 'sem_desc' ? 'active' : ''}`} onClick={() => setFilter('sem_desc')}>📝 Sem Desc ({filterStats.sem_desc})</span>
-              <span className={`chip ${filter === 'sem_preco' ? 'active' : ''}`} onClick={() => setFilter('sem_preco')}>💰 Sem Preço ({filterStats.sem_preco})</span>
+              <span className={`chip ${filter === 'todos' ? 'active' : ''}`} onClick={() => setFilter('todos')}>Todos</span>
+              <span className={`chip ${filter === 'sem_foto' ? 'active' : ''}`} onClick={() => setFilter('sem_foto')}>📷 Sem Foto</span>
+              <span className={`chip ${filter === 'sem_desc' ? 'active' : ''}`} onClick={() => setFilter('sem_desc')}>📝 Sem Desc</span>
+              <span className={`chip ${filter === 'sem_preco' ? 'active' : ''}`} onClick={() => setFilter('sem_preco')}>💰 Sem Preço</span>
             </div>
 
             <div className="items-list">
@@ -482,6 +522,7 @@ function RestaurantePage({ restId, onBack }: { restId: number; onBack: () => voi
         </div>
       )}
 
+      {/* Tab: Itens */}
       {tab === 'itens' && (
         <div className="items-table-container">
           <table className="items-table">
@@ -497,24 +538,20 @@ function RestaurantePage({ restId, onBack }: { restId: number; onBack: () => voi
             </thead>
             <tbody>
               {filteredItens.map(item => (
-                <tr key={item.id}>
+                <tr key={item.id} className={item.sem_foto || item.sem_desc || item.sem_preco ? 'row-problem' : ''}>
                   <td>
-                    {item.imagem_url ? (
-                      <img src={item.imagem_url} alt="" className="item-thumb" />
-                    ) : (
-                      <div className="item-thumb placeholder">📷</div>
-                    )}
+                    {item.imagem_url ? <img src={item.imagem_url} alt="" className="item-thumb" /> : <div className="item-thumb placeholder">📷</div>}
                   </td>
-                  <td><strong>{item.nome}</strong></td>
+                  <td><strong>{item.nome}</strong><br/><small className="text-muted">ID: {item.origem_id}</small></td>
                   <td><span className="badge badge-neutral">{item.categoria_nome}</span></td>
                   <td className="desc-cell">{item.descricao || <span className="text-muted">Sem descrição</span>}</td>
-                  <td>{item.precos.length > 0 ? `R$ ${item.precos[0]?.valor?.toFixed(2) || '-'}` : <span className="text-muted">Sem preço</span>}</td>
+                  <td>{item.precos && item.precos.length > 0 ? item.precos.map((p, i) => <div key={i}>{p.tamanho_nome}: R$ {p.valor?.toFixed(2) || '-'}</div>) : <span className="text-muted">-</span>}</td>
                   <td>
                     <div className="status-badges">
                       {item.sem_foto && <span className="badge badge-danger">📷</span>}
                       {item.sem_desc && <span className="badge badge-warning">📝</span>}
                       {item.sem_preco && <span className="badge badge-warning">💰</span>}
-                      {!item.sem_foto && !item.sem_desc && !item.sem_preco && <span className="badge badge-success">✓ OK</span>}
+                      {!item.sem_foto && !item.sem_desc && !item.sem_preco && <span className="badge badge-success">✓</span>}
                     </div>
                   </td>
                 </tr>
@@ -524,14 +561,15 @@ function RestaurantePage({ restId, onBack }: { restId: number; onBack: () => voi
         </div>
       )}
 
+      {/* Tab: iFood Preencher */}
       {tab === 'ifood' && (
         <div className="ifood-panel">
           <div className="panel-info">
             <h3>🍔 Preencher com iFood</h3>
-            <p>Itens do Geraldo com lacunas que podem ser preenchidos com dados do iFood (quando houver match).</p>
+            <p>Itens do Geraldo com lacunas que podem ser preenchidos com dados do iFood.</p>
           </div>
           <div className="items-list">
-            {itens.filter(i => i.sem_foto || i.sem_desc || i.sem_preco).map(item => (
+            {itensComFlags.filter(i => i.sem_foto || i.sem_desc || i.sem_preco).map(item => (
               <div key={item.id} className="ifood-item">
                 <div className="ifood-item-left">
                   {item.imagem_url ? <img src={item.imagem_url} alt="" className="item-thumb" /> : <div className="item-thumb placeholder">📷</div>}
@@ -545,24 +583,49 @@ function RestaurantePage({ restId, onBack }: { restId: number; onBack: () => voi
                   </div>
                 </div>
                 <div className="ifood-item-right">
-                  <span className="text-muted">Match não configurado</span>
+                  {matches.find(m => m.item_geraldo_id === item.id) ? (
+                    <span className="badge badge-success">Match encontrado</span>
+                  ) : (
+                    <span className="text-muted">Sem match</span>
+                  )}
                 </div>
               </div>
             ))}
-            {itens.filter(i => i.sem_foto || i.sem_desc || i.sem_preco).length === 0 && (
+            {itensComFlags.filter(i => i.sem_foto || i.sem_desc || i.sem_preco).length === 0 && (
               <div className="empty success">🎉 Todos os itens estão completos!</div>
             )}
           </div>
         </div>
       )}
 
+      {/* Tab: Matches */}
       {tab === 'matches' && (
         <div className="matches-panel">
           <div className="panel-info">
             <h3>🔗 Matches Geraldo ↔ iFood</h3>
-            <p>Gerencie os matches entre itens do Geraldo e iFood.</p>
+            <p>{matches.length} matches encontrados para este restaurante.</p>
           </div>
-          <div className="empty">Matches serão carregados da tabela item_matches</div>
+          {matches.length > 0 ? (
+            <div className="matches-list">
+              {matches.map(m => {
+                const itemGeraldo = itensComFlags.find(i => i.id === m.item_geraldo_id)
+                return (
+                  <div key={m.id} className="match-item">
+                    <div className="match-info">
+                      <strong>{itemGeraldo?.nome || `Item #${m.item_geraldo_id}`}</strong>
+                      <div className="match-details">
+                        <span className={`badge ${m.confianca >= 90 ? 'badge-success' : 'badge-warning'}`}>{m.confianca}%</span>
+                        <span className="badge badge-neutral">{m.status}</span>
+                        <span className="badge badge-info">{m.match_por}</span>
+                      </div>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          ) : (
+            <div className="empty">Nenhum match encontrado. Execute o script SQL para popular.</div>
+          )}
         </div>
       )}
     </div>
@@ -570,25 +633,21 @@ function RestaurantePage({ restId, onBack }: { restId: number; onBack: () => voi
 }
 
 // ==================== ITEM CARD ====================
-function ItemCard({ item }: { item: Item }) {
+function ItemCard({ item }: { item: Item & { precos?: Preco[]; sem_foto?: boolean; sem_desc?: boolean; sem_preco?: boolean; categoria_nome?: string } }) {
   const [expanded, setExpanded] = useState(false)
 
   return (
     <div className={`item-card ${item.sem_foto || item.sem_desc || item.sem_preco ? 'has-problem' : ''}`}>
       <div className="item-card-main" onClick={() => setExpanded(!expanded)}>
         <div className="item-thumb-container">
-          {item.imagem_url ? (
-            <img src={item.imagem_url} alt="" className="item-thumb" />
-          ) : (
-            <div className="item-thumb placeholder">📷</div>
-          )}
+          {item.imagem_url ? <img src={item.imagem_url} alt="" className="item-thumb" /> : <div className="item-thumb placeholder">📷</div>}
         </div>
         <div className="item-info">
           <div className="item-name">{item.nome}</div>
           <div className="item-desc">{item.descricao || <span className="text-muted">Sem descrição</span>}</div>
           <div className="item-meta">
             <span className="badge badge-neutral">{item.categoria_nome}</span>
-            {item.precos.length > 0 && item.precos[0]?.valor && (
+            {item.precos && item.precos.length > 0 && item.precos[0]?.valor && (
               <span className="item-price">R$ {item.precos[0].valor.toFixed(2)}</span>
             )}
           </div>
@@ -603,12 +662,16 @@ function ItemCard({ item }: { item: Item }) {
       
       {expanded && (
         <div className="item-card-expanded">
+          <div className="item-details">
+            <p><strong>ID Origem:</strong> {item.origem_id}</p>
+            <p><strong>Descrição:</strong> {item.descricao || 'Sem descrição'}</p>
+          </div>
           <div className="item-actions">
             {item.imagem_url && <a href={item.imagem_url} target="_blank" className="btn btn-small">🔗 Ver imagem</a>}
             <button className="btn btn-small" onClick={() => navigator.clipboard.writeText(item.nome)}>📋 Copiar nome</button>
             {item.descricao && <button className="btn btn-small" onClick={() => navigator.clipboard.writeText(item.descricao!)}>📋 Copiar desc</button>}
           </div>
-          {item.precos.length > 1 && (
+          {item.precos && item.precos.length > 0 && (
             <div className="item-sizes">
               <strong>Tamanhos/Preços:</strong>
               {item.precos.map((p, i) => (
@@ -628,6 +691,9 @@ function ItemCard({ item }: { item: Item }) {
 // ==================== ITENS PAGE (GLOBAL) ====================
 function ItensPage() {
   const [itens, setItens] = useState<Item[]>([])
+  const [categorias, setCategorias] = useState<Categoria[]>([])
+  const [restaurantes, setRestaurantes] = useState<Restaurante[]>([])
+  const [precos, setPrecos] = useState<Preco[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState<Filter>('todos')
@@ -638,40 +704,56 @@ function ItensPage() {
 
   async function loadItens() {
     setLoading(true)
-    
-    const { data } = await supabase.from('itens')
-      .select('*, categorias!inner(id, nome, restaurante_id, origem, restaurantes(id, nome)), precos(valor, tamanho_nome)')
-      .eq('categorias.origem', 'geraldo')
-      .order('nome')
-      .range(0, 999)
+    try {
+      const [cats, items, rests, prices] = await Promise.all([
+        query('categorias', '?origem=eq.geraldo'),
+        query('itens'),
+        query('restaurantes'),
+        query('precos')
+      ])
+      setCategorias(cats || [])
+      setItens(items || [])
+      setRestaurantes(rests || [])
+      setPrecos(prices || [])
+    } catch (e) {
+      console.error(e)
+    }
+    setLoading(false)
+  }
 
-    const processedItens: Item[] = (data || []).map((i: any) => {
-      const precos = i.precos || []
-      const temPreco = precos.some((p: any) => p.valor != null && p.valor > 0)
+  // Processar itens
+  const itensProcessados = useMemo(() => {
+    const catMap = new Map(categorias.map(c => [c.id, c]))
+    const restMap = new Map(restaurantes.map(r => [r.id, r]))
+    const precosByItem = new Map<number, Preco[]>()
+    precos.forEach(p => {
+      if (!precosByItem.has(p.item_id)) precosByItem.set(p.item_id, [])
+      precosByItem.get(p.item_id)!.push(p)
+    })
+
+    return itens.filter(i => {
+      const cat = catMap.get(i.categoria_id)
+      return cat && cat.origem === 'geraldo'
+    }).map(i => {
+      const cat = catMap.get(i.categoria_id)
+      const rest = cat ? restMap.get(cat.restaurante_id) : null
+      const itemPrecos = precosByItem.get(i.id) || []
+      const temPreco = itemPrecos.some(p => p.valor != null && p.valor > 0)
       return {
-        id: i.id,
-        nome: i.nome,
-        descricao: i.descricao,
-        imagem_url: i.imagem_url,
-        origem: 'geraldo',
-        origem_id: i.origem_id,
-        categoria_id: i.categorias?.id,
-        categoria_nome: i.categorias?.nome || '',
-        restaurante_id: i.categorias?.restaurantes?.id,
-        restaurante_nome: i.categorias?.restaurantes?.nome || '',
-        precos,
+        ...i,
+        categoria_nome: cat?.nome || '',
+        restaurante_id: cat?.restaurante_id,
+        restaurante_nome: rest?.nome || '',
+        precos: itemPrecos,
         sem_foto: !i.imagem_url,
         sem_desc: !i.descricao || i.descricao.trim() === '',
         sem_preco: !temPreco
       }
     })
-
-    setItens(processedItens)
-    setLoading(false)
-  }
+  }, [itens, categorias, restaurantes, precos])
 
   // Filtrar
-  const filtered = itens.filter(i => {
+  const filtered = itensProcessados.filter(i => {
     const matchSearch = i.nome.toLowerCase().includes(search.toLowerCase()) || 
       i.restaurante_nome.toLowerCase().includes(search.toLowerCase())
     const matchFilter = filter === 'todos' ? true :
@@ -698,7 +780,7 @@ function ItensPage() {
       <header className="page-header">
         <div>
           <h2>Itens Global</h2>
-          <p>Auditoria de todos os itens do sistema (Geraldo)</p>
+          <p>Auditoria de todos os itens Geraldo do sistema</p>
         </div>
         <button className="btn btn-primary" onClick={loadItens}>🔄 Atualizar</button>
       </header>
@@ -731,7 +813,7 @@ function ItensPage() {
 
       {/* Tabela */}
       {loading ? (
-        <div className="loading">Carregando...</div>
+        <div className="loading">Carregando itens do Supabase...</div>
       ) : (
         <div className="items-table-container">
           <table className="items-table">
@@ -749,16 +831,12 @@ function ItensPage() {
               {paged.map(item => (
                 <tr key={item.id} className={item.sem_foto || item.sem_desc || item.sem_preco ? 'row-problem' : ''}>
                   <td>
-                    {item.imagem_url ? (
-                      <img src={item.imagem_url} alt="" className="item-thumb" />
-                    ) : (
-                      <div className="item-thumb placeholder">📷</div>
-                    )}
+                    {item.imagem_url ? <img src={item.imagem_url} alt="" className="item-thumb" /> : <div className="item-thumb placeholder">📷</div>}
                   </td>
                   <td><strong>{item.nome}</strong></td>
                   <td><span className="badge badge-info">{item.restaurante_nome}</span></td>
                   <td><span className="badge badge-neutral">{item.categoria_nome}</span></td>
-                  <td>{item.precos.length > 0 && item.precos[0]?.valor ? `R$ ${item.precos[0].valor.toFixed(2)}` : <span className="text-muted">-</span>}</td>
+                  <td>{item.precos && item.precos.length > 0 && item.precos[0]?.valor ? `R$ ${item.precos[0].valor.toFixed(2)}` : <span className="text-muted">-</span>}</td>
                   <td>
                     <div className="status-badges">
                       {item.sem_foto && <span className="badge badge-danger">📷</span>}
