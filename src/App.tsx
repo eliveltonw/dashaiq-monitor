@@ -85,7 +85,7 @@ interface ItemMatch {
 
 type View = 'home' | 'restaurante' | 'itens'
 type Tab = 'monitor' | 'itens' | 'ifood' | 'matches'
-type Filter = 'todos' | 'sem_foto' | 'sem_desc' | 'sem_preco'
+type Filter = 'todos' | 'sem_desc' | 'sem_preco' | 'sem_match'
 
 // ==================== APP ====================
 function App() {
@@ -138,6 +138,7 @@ function HomePage({ onSelectRest }: { onSelectRest: (id: number) => void }) {
   const [categorias, setCategorias] = useState<Categoria[]>([])
   const [itens, setItens] = useState<Item[]>([])
   const [precos, setPrecos] = useState<Preco[]>([])
+  const [matches, setMatches] = useState<ItemMatch[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState<'todos' | 'com_problema' | 'sem_ifood'>('todos')
@@ -147,16 +148,18 @@ function HomePage({ onSelectRest }: { onSelectRest: (id: number) => void }) {
   async function loadData() {
     setLoading(true)
     try {
-      const [rests, cats, items, prices] = await Promise.all([
+      const [rests, cats, items, prices, matchesData] = await Promise.all([
         query('restaurantes', '?order=nome'),
         query('categorias', '?origem=eq.geraldo'),
         query('itens'),
-        query('precos')
+        query('precos'),
+        query('item_matches')
       ])
       setRestaurantes(rests || [])
       setCategorias(cats || [])
       setItens(items || [])
       setPrecos(prices || [])
+      setMatches(matchesData || [])
     } catch (e) {
       console.error(e)
     }
@@ -183,6 +186,12 @@ function HomePage({ onSelectRest }: { onSelectRest: (id: number) => void }) {
       precosByItem.get(p.item_id)!.push(p)
     })
 
+    // Matches por restaurante
+    const matchesByRest = new Map<number, number>()
+    matches.forEach(m => {
+      matchesByRest.set(m.restaurante_id, (matchesByRest.get(m.restaurante_id) || 0) + 1)
+    })
+
     return restaurantes.map(r => {
       const catIds = catMap.get(r.id) || []
       const restItens: Item[] = []
@@ -191,9 +200,8 @@ function HomePage({ onSelectRest }: { onSelectRest: (id: number) => void }) {
         restItens.push(...catItems)
       })
 
-      let sem_foto = 0, sem_desc = 0, sem_preco = 0
+      let sem_desc = 0, sem_preco = 0
       restItens.forEach(item => {
-        if (!item.imagem_url) sem_foto++
         if (!item.descricao || item.descricao.trim() === '') sem_desc++
         const itemPrecos = precosByItem.get(item.id) || []
         const temPreco = itemPrecos.some(p => p.valor != null && p.valor > 0)
@@ -204,28 +212,31 @@ function HomePage({ onSelectRest }: { onSelectRest: (id: number) => void }) {
         ...r,
         total_cats: catIds.length,
         total_itens: restItens.length,
-        sem_foto,
+        com_match: matchesByRest.get(r.id) || 0,
+        sem_match: restItens.length - (matchesByRest.get(r.id) || 0),
         sem_desc,
         sem_preco
       }
     })
-  }, [restaurantes, categorias, itens, precos])
+  }, [restaurantes, categorias, itens, precos, matches])
 
-  // Stats globais
+  // Stats globais - NOTA: Geraldo NUNCA tem foto (vem do iFood via match)
   const stats = useMemo(() => ({
     total: restComStats.length,
     sem_ifood: restComStats.filter(r => !r.ifood_uuid).length,
-    sem_foto: restComStats.reduce((acc, r) => acc + (r.sem_foto || 0), 0),
+    total_itens: restComStats.reduce((acc, r) => acc + (r.total_itens || 0), 0),
+    com_match: restComStats.reduce((acc, r) => acc + (r.com_match || 0), 0),
+    sem_match: restComStats.reduce((acc, r) => acc + (r.sem_match || 0), 0),
     sem_desc: restComStats.reduce((acc, r) => acc + (r.sem_desc || 0), 0),
     sem_preco: restComStats.reduce((acc, r) => acc + (r.sem_preco || 0), 0)
   }), [restComStats])
 
-  // Filtrar
+  // Filtrar - NOTA: sem_foto não é problema (Geraldo nunca tem foto)
   const filtered = restComStats.filter(r => {
     const matchSearch = r.nome.toLowerCase().includes(search.toLowerCase()) || r.geraldo_id.toString().includes(search)
     const matchFilter = filter === 'todos' ? true :
       filter === 'sem_ifood' ? !r.ifood_uuid :
-      ((r.sem_foto || 0) > 0 || (r.sem_desc || 0) > 0 || (r.sem_preco || 0) > 0)
+      ((r.sem_desc || 0) > 0 || (r.sem_preco || 0) > 0)
     return matchSearch && matchFilter
   })
 
@@ -239,27 +250,27 @@ function HomePage({ onSelectRest }: { onSelectRest: (id: number) => void }) {
         <button className="btn btn-primary" onClick={loadData}>🔄 Atualizar</button>
       </header>
 
-      {/* KPIs */}
+      {/* KPIs - NOTA: Foto vem do iFood via match, não do Geraldo */}
       <div className="kpi-row">
         <div className={`kpi ${filter === 'todos' ? 'active' : ''}`} onClick={() => setFilter('todos')}>
           <div className="kpi-value">{stats.total}</div>
-          <div className="kpi-label">Total</div>
+          <div className="kpi-label">Restaurantes</div>
         </div>
         <div className={`kpi ${filter === 'sem_ifood' ? 'active' : ''}`} onClick={() => setFilter('sem_ifood')}>
           <div className="kpi-value red">{stats.sem_ifood}</div>
           <div className="kpi-label">Sem iFood</div>
         </div>
+        <div className="kpi">
+          <div className="kpi-value green">{stats.com_match}</div>
+          <div className="kpi-label">Com Match</div>
+        </div>
+        <div className="kpi">
+          <div className="kpi-value orange">{stats.sem_match}</div>
+          <div className="kpi-label">Sem Match</div>
+        </div>
         <div className={`kpi ${filter === 'com_problema' ? 'active' : ''}`} onClick={() => setFilter('com_problema')}>
-          <div className="kpi-value orange">{stats.sem_foto}</div>
-          <div className="kpi-label">Itens s/ Foto</div>
-        </div>
-        <div className="kpi" onClick={() => setFilter('com_problema')}>
           <div className="kpi-value orange">{stats.sem_desc}</div>
-          <div className="kpi-label">Itens s/ Desc</div>
-        </div>
-        <div className="kpi" onClick={() => setFilter('com_problema')}>
-          <div className="kpi-value orange">{stats.sem_preco}</div>
-          <div className="kpi-label">Itens s/ Preço</div>
+          <div className="kpi-label">s/ Descrição</div>
         </div>
       </div>
 
@@ -304,8 +315,8 @@ function HomePage({ onSelectRest }: { onSelectRest: (id: number) => void }) {
                   <span className="stat-label">Itens</span>
                 </div>
                 <div className="card-stat">
-                  <span className={`stat-value ${(r.sem_foto || 0) > 0 ? 'red' : 'green'}`}>{r.sem_foto || 0}</span>
-                  <span className="stat-label">s/ Foto</span>
+                  <span className={`stat-value ${(r.com_match || 0) > 0 ? 'green' : ''}`}>{r.com_match || 0}</span>
+                  <span className="stat-label">Match</span>
                 </div>
                 <div className="card-stat">
                   <span className={`stat-value ${(r.sem_desc || 0) > 0 ? 'red' : 'green'}`}>{r.sem_desc || 0}</span>
@@ -397,36 +408,39 @@ function RestaurantePage({ restId, onBack }: { restId: number; onBack: () => voi
     })
   }, [itens, precos, categorias])
 
-  // Stats por categoria
+  // Stats por categoria - sem_foto não é relevante
   const categoriasComStats = useMemo(() => {
     return categorias.map(c => {
       const catItens = itensComFlags.filter(i => i.categoria_id === c.id)
+      const catMatchCount = catItens.filter(i => matches.some(m => m.item_geraldo_id === i.id)).length
       return {
         ...c,
         total_itens: catItens.length,
-        sem_foto: catItens.filter(i => i.sem_foto).length,
+        com_match: catMatchCount,
+        sem_match: catItens.length - catMatchCount,
         sem_desc: catItens.filter(i => i.sem_desc).length,
         sem_preco: catItens.filter(i => i.sem_preco).length
       }
     })
-  }, [categorias, itensComFlags])
+  }, [categorias, itensComFlags, matches])
 
-  // Filtrar itens
+  // Filtrar itens - sem_foto não é relevante, adicionar sem_match
   const filteredItens = itensComFlags.filter(i => {
     const matchCat = selectedCat === null || i.categoria_id === selectedCat
     const matchSearch = i.nome.toLowerCase().includes(search.toLowerCase())
+    const hasMatch = matches.some(m => m.item_geraldo_id === i.id)
     const matchFilter = filter === 'todos' ? true :
-      filter === 'sem_foto' ? i.sem_foto :
       filter === 'sem_desc' ? i.sem_desc :
-      i.sem_preco
+      filter === 'sem_preco' ? i.sem_preco :
+      filter === 'sem_match' ? !hasMatch :
+      true
     return matchCat && matchSearch && matchFilter
   })
 
-  // Stats do restaurante
+  // Stats do restaurante - sem_foto não é relevante (Geraldo nunca tem)
   const restStats = useMemo(() => ({
     total_cats: categorias.length,
     total_itens: itensComFlags.length,
-    sem_foto: itensComFlags.filter(i => i.sem_foto).length,
     sem_desc: itensComFlags.filter(i => i.sem_desc).length,
     sem_preco: itensComFlags.filter(i => i.sem_preco).length
   }), [categorias, itensComFlags])
@@ -454,12 +468,12 @@ function RestaurantePage({ restId, onBack }: { restId: number; onBack: () => voi
         </div>
       </header>
 
-      {/* KPIs */}
+      {/* KPIs - Geraldo nunca tem foto, foco em match/desc/preço */}
       <div className="kpi-row small">
         <div className="kpi"><div className="kpi-value">{restStats.total_cats}</div><div className="kpi-label">Categorias</div></div>
         <div className="kpi"><div className="kpi-value">{restStats.total_itens}</div><div className="kpi-label">Itens</div></div>
-        <div className={`kpi ${filter === 'sem_foto' ? 'active' : ''}`} onClick={() => setFilter(f => f === 'sem_foto' ? 'todos' : 'sem_foto')}>
-          <div className={`kpi-value ${restStats.sem_foto > 0 ? 'red' : 'green'}`}>{restStats.sem_foto}</div><div className="kpi-label">Sem Foto</div>
+        <div className="kpi">
+          <div className={`kpi-value ${matches.length > 0 ? 'green' : ''}`}>{matches.length}</div><div className="kpi-label">Com Match</div>
         </div>
         <div className={`kpi ${filter === 'sem_desc' ? 'active' : ''}`} onClick={() => setFilter(f => f === 'sem_desc' ? 'todos' : 'sem_desc')}>
           <div className={`kpi-value ${restStats.sem_desc > 0 ? 'red' : 'green'}`}>{restStats.sem_desc}</div><div className="kpi-label">Sem Desc</div>
@@ -490,10 +504,10 @@ function RestaurantePage({ restId, onBack }: { restId: number; onBack: () => voi
               <div key={c.id} className={`category-item ${selectedCat === c.id ? 'active' : ''}`} onClick={() => setSelectedCat(c.id)}>
                 <span className="cat-name">{c.nome}</span>
                 <div className="cat-badges">
-                  {c.sem_foto > 0 && <span className="mini-badge red">{c.sem_foto}📷</span>}
+                  {c.sem_match > 0 && <span className="mini-badge red">{c.sem_match}🔗</span>}
                   {c.sem_desc > 0 && <span className="mini-badge orange">{c.sem_desc}📝</span>}
                   {c.sem_preco > 0 && <span className="mini-badge yellow">{c.sem_preco}💰</span>}
-                  {c.sem_foto === 0 && c.sem_desc === 0 && c.sem_preco === 0 && <span className="mini-badge green">✓</span>}
+                  {c.sem_match === 0 && c.sem_desc === 0 && c.sem_preco === 0 && <span className="mini-badge green">✓</span>}
                 </div>
               </div>
             ))}
@@ -507,14 +521,14 @@ function RestaurantePage({ restId, onBack }: { restId: number; onBack: () => voi
             
             <div className="filter-chips small">
               <span className={`chip ${filter === 'todos' ? 'active' : ''}`} onClick={() => setFilter('todos')}>Todos</span>
-              <span className={`chip ${filter === 'sem_foto' ? 'active' : ''}`} onClick={() => setFilter('sem_foto')}>📷 Sem Foto</span>
               <span className={`chip ${filter === 'sem_desc' ? 'active' : ''}`} onClick={() => setFilter('sem_desc')}>📝 Sem Desc</span>
               <span className={`chip ${filter === 'sem_preco' ? 'active' : ''}`} onClick={() => setFilter('sem_preco')}>💰 Sem Preço</span>
+              <span className={`chip ${filter === 'sem_match' ? 'active' : ''}`} onClick={() => setFilter('sem_match')}>🔗 Sem Match</span>
             </div>
 
             <div className="items-list">
               {filteredItens.map(item => (
-                <ItemCard key={item.id} item={item} />
+                <ItemCard key={item.id} item={item} hasMatch={matches.some(m => m.item_geraldo_id === item.id)} />
               ))}
               {filteredItens.length === 0 && <div className="empty">Nenhum item encontrado</div>}
             </div>
@@ -528,7 +542,7 @@ function RestaurantePage({ restId, onBack }: { restId: number; onBack: () => voi
           <table className="items-table">
             <thead>
               <tr>
-                <th>Imagem</th>
+                <th>Match</th>
                 <th>Nome</th>
                 <th>Categoria</th>
                 <th>Descrição</th>
@@ -537,10 +551,12 @@ function RestaurantePage({ restId, onBack }: { restId: number; onBack: () => voi
               </tr>
             </thead>
             <tbody>
-              {filteredItens.map(item => (
-                <tr key={item.id} className={item.sem_foto || item.sem_desc || item.sem_preco ? 'row-problem' : ''}>
+              {filteredItens.map(item => {
+                const hasMatch = matches.some(m => m.item_geraldo_id === item.id)
+                return (
+                <tr key={item.id} className={!hasMatch || item.sem_desc || item.sem_preco ? 'row-problem' : ''}>
                   <td>
-                    {item.imagem_url ? <img src={item.imagem_url} alt="" className="item-thumb" /> : <div className="item-thumb placeholder">📷</div>}
+                    {hasMatch ? <span className="badge badge-success">🔗</span> : <span className="badge badge-danger">❓</span>}
                   </td>
                   <td><strong>{item.nome}</strong><br/><small className="text-muted">ID: {item.origem_id}</small></td>
                   <td><span className="badge badge-neutral">{item.categoria_nome}</span></td>
@@ -548,51 +564,59 @@ function RestaurantePage({ restId, onBack }: { restId: number; onBack: () => voi
                   <td>{item.precos && item.precos.length > 0 ? item.precos.map((p, i) => <div key={i}>{p.tamanho_nome}: R$ {p.valor?.toFixed(2) || '-'}</div>) : <span className="text-muted">-</span>}</td>
                   <td>
                     <div className="status-badges">
-                      {item.sem_foto && <span className="badge badge-danger">📷</span>}
                       {item.sem_desc && <span className="badge badge-warning">📝</span>}
                       {item.sem_preco && <span className="badge badge-warning">💰</span>}
-                      {!item.sem_foto && !item.sem_desc && !item.sem_preco && <span className="badge badge-success">✓</span>}
+                      {!item.sem_desc && !item.sem_preco && hasMatch && <span className="badge badge-success">✓</span>}
                     </div>
                   </td>
                 </tr>
-              ))}
+              )})}
             </tbody>
           </table>
         </div>
       )}
 
-      {/* Tab: iFood Preencher */}
+      {/* Tab: iFood Preencher - Itens COM match podem puxar foto */}
       {tab === 'ifood' && (
         <div className="ifood-panel">
           <div className="panel-info">
             <h3>🍔 Preencher com iFood</h3>
-            <p>Itens do Geraldo com lacunas que podem ser preenchidos com dados do iFood.</p>
+            <p>Itens do Geraldo que TÊM match podem copiar foto/descrição/preço do iFood.</p>
+            <p className="text-muted">Geraldo nunca tem foto própria - a foto vem do iFood via match.</p>
           </div>
+          
+          <div className="ifood-stats">
+            <div className="ifood-stat">
+              <span className="ifood-stat-value green">{matches.length}</span>
+              <span className="ifood-stat-label">Com Match (podem puxar foto)</span>
+            </div>
+            <div className="ifood-stat">
+              <span className="ifood-stat-value red">{itensComFlags.length - matches.length}</span>
+              <span className="ifood-stat-label">Sem Match (precisam vincular)</span>
+            </div>
+          </div>
+
+          <h4>Itens com lacunas que TÊM match:</h4>
           <div className="items-list">
-            {itensComFlags.filter(i => i.sem_foto || i.sem_desc || i.sem_preco).map(item => (
+            {itensComFlags.filter(i => (i.sem_desc || i.sem_preco) && matches.some(m => m.item_geraldo_id === i.id)).map(item => (
               <div key={item.id} className="ifood-item">
                 <div className="ifood-item-left">
-                  {item.imagem_url ? <img src={item.imagem_url} alt="" className="item-thumb" /> : <div className="item-thumb placeholder">📷</div>}
+                  <div className="item-thumb placeholder">🔗</div>
                   <div>
                     <strong>{item.nome}</strong>
                     <div className="status-badges">
-                      {item.sem_foto && <span className="badge badge-danger">Sem foto</span>}
                       {item.sem_desc && <span className="badge badge-warning">Sem desc</span>}
                       {item.sem_preco && <span className="badge badge-warning">Sem preço</span>}
                     </div>
                   </div>
                 </div>
                 <div className="ifood-item-right">
-                  {matches.find(m => m.item_geraldo_id === item.id) ? (
-                    <span className="badge badge-success">Match encontrado</span>
-                  ) : (
-                    <span className="text-muted">Sem match</span>
-                  )}
+                  <span className="badge badge-success">✅ Pode puxar do iFood</span>
                 </div>
               </div>
             ))}
-            {itensComFlags.filter(i => i.sem_foto || i.sem_desc || i.sem_preco).length === 0 && (
-              <div className="empty success">🎉 Todos os itens estão completos!</div>
+            {itensComFlags.filter(i => (i.sem_desc || i.sem_preco) && matches.some(m => m.item_geraldo_id === i.id)).length === 0 && (
+              <div className="empty success">🎉 Todos os itens com match estão completos!</div>
             )}
           </div>
         </div>
@@ -633,14 +657,14 @@ function RestaurantePage({ restId, onBack }: { restId: number; onBack: () => voi
 }
 
 // ==================== ITEM CARD ====================
-function ItemCard({ item }: { item: Item & { precos?: Preco[]; sem_foto?: boolean; sem_desc?: boolean; sem_preco?: boolean; categoria_nome?: string } }) {
+function ItemCard({ item, hasMatch }: { item: Item & { precos?: Preco[]; sem_foto?: boolean; sem_desc?: boolean; sem_preco?: boolean; categoria_nome?: string }, hasMatch?: boolean }) {
   const [expanded, setExpanded] = useState(false)
 
   return (
-    <div className={`item-card ${item.sem_foto || item.sem_desc || item.sem_preco ? 'has-problem' : ''}`}>
+    <div className={`item-card ${item.sem_desc || item.sem_preco || !hasMatch ? 'has-problem' : ''}`}>
       <div className="item-card-main" onClick={() => setExpanded(!expanded)}>
         <div className="item-thumb-container">
-          {item.imagem_url ? <img src={item.imagem_url} alt="" className="item-thumb" /> : <div className="item-thumb placeholder">📷</div>}
+          <div className="item-thumb placeholder">{hasMatch ? '🔗' : '❓'}</div>
         </div>
         <div className="item-info">
           <div className="item-name">{item.nome}</div>
@@ -653,10 +677,9 @@ function ItemCard({ item }: { item: Item & { precos?: Preco[]; sem_foto?: boolea
           </div>
         </div>
         <div className="item-flags">
-          {item.sem_foto && <span className="flag red" title="Sem foto">📷</span>}
+          {hasMatch ? <span className="flag green" title="Com match">🔗</span> : <span className="flag red" title="Sem match">❓</span>}
           {item.sem_desc && <span className="flag orange" title="Sem descrição">📝</span>}
           {item.sem_preco && <span className="flag yellow" title="Sem preço">💰</span>}
-          {!item.sem_foto && !item.sem_desc && !item.sem_preco && <span className="flag green">✓</span>}
         </div>
       </div>
       
@@ -664,10 +687,10 @@ function ItemCard({ item }: { item: Item & { precos?: Preco[]; sem_foto?: boolea
         <div className="item-card-expanded">
           <div className="item-details">
             <p><strong>ID Origem:</strong> {item.origem_id}</p>
+            <p><strong>Match:</strong> {hasMatch ? '✅ Com match (pode copiar foto do iFood)' : '❌ Sem match'}</p>
             <p><strong>Descrição:</strong> {item.descricao || 'Sem descrição'}</p>
           </div>
           <div className="item-actions">
-            {item.imagem_url && <a href={item.imagem_url} target="_blank" className="btn btn-small">🔗 Ver imagem</a>}
             <button className="btn btn-small" onClick={() => navigator.clipboard.writeText(item.nome)}>📋 Copiar nome</button>
             {item.descricao && <button className="btn btn-small" onClick={() => navigator.clipboard.writeText(item.descricao!)}>📋 Copiar desc</button>}
           </div>
@@ -694,6 +717,7 @@ function ItensPage() {
   const [categorias, setCategorias] = useState<Categoria[]>([])
   const [restaurantes, setRestaurantes] = useState<Restaurante[]>([])
   const [precos, setPrecos] = useState<Preco[]>([])
+  const [matches, setMatches] = useState<ItemMatch[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState<Filter>('todos')
@@ -705,23 +729,25 @@ function ItensPage() {
   async function loadItens() {
     setLoading(true)
     try {
-      const [cats, items, rests, prices] = await Promise.all([
+      const [cats, items, rests, prices, matchesData] = await Promise.all([
         query('categorias', '?origem=eq.geraldo'),
         query('itens'),
         query('restaurantes'),
-        query('precos')
+        query('precos'),
+        query('item_matches')
       ])
       setCategorias(cats || [])
       setItens(items || [])
       setRestaurantes(rests || [])
       setPrecos(prices || [])
+      setMatches(matchesData || [])
     } catch (e) {
       console.error(e)
     }
     setLoading(false)
   }
 
-  // Processar itens
+  // Processar itens com match status
   const itensProcessados = useMemo(() => {
     const catMap = new Map(categorias.map(c => [c.id, c]))
     const restMap = new Map(restaurantes.map(r => [r.id, r]))
@@ -730,6 +756,8 @@ function ItensPage() {
       if (!precosByItem.has(p.item_id)) precosByItem.set(p.item_id, [])
       precosByItem.get(p.item_id)!.push(p)
     })
+    
+    const matchedIds = new Set(matches.map(m => m.item_geraldo_id))
 
     return itens.filter(i => {
       const cat = catMap.get(i.categoria_id)
@@ -745,21 +773,22 @@ function ItensPage() {
         restaurante_id: cat?.restaurante_id,
         restaurante_nome: rest?.nome || '',
         precos: itemPrecos,
-        sem_foto: !i.imagem_url,
+        has_match: matchedIds.has(i.id),
         sem_desc: !i.descricao || i.descricao.trim() === '',
         sem_preco: !temPreco
       }
     })
-  }, [itens, categorias, restaurantes, precos])
+  }, [itens, categorias, restaurantes, precos, matches])
 
-  // Filtrar
+  // Filtrar - sem_foto removido, adicionar sem_match
   const filtered = itensProcessados.filter(i => {
     const matchSearch = i.nome.toLowerCase().includes(search.toLowerCase()) || 
       i.restaurante_nome.toLowerCase().includes(search.toLowerCase())
     const matchFilter = filter === 'todos' ? true :
-      filter === 'sem_foto' ? i.sem_foto :
       filter === 'sem_desc' ? i.sem_desc :
-      i.sem_preco
+      filter === 'sem_preco' ? i.sem_preco :
+      filter === 'sem_match' ? !i.has_match :
+      true
     return matchSearch && matchFilter
   })
 
@@ -767,10 +796,11 @@ function ItensPage() {
   const paged = filtered.slice(page * pageSize, (page + 1) * pageSize)
   const totalPages = Math.ceil(filtered.length / pageSize)
 
-  // Stats
+  // Stats - com match status
   const stats = {
     total: filtered.length,
-    sem_foto: filtered.filter(i => i.sem_foto).length,
+    com_match: filtered.filter(i => i.has_match).length,
+    sem_match: filtered.filter(i => !i.has_match).length,
     sem_desc: filtered.filter(i => i.sem_desc).length,
     sem_preco: filtered.filter(i => i.sem_preco).length
   }
@@ -785,19 +815,19 @@ function ItensPage() {
         <button className="btn btn-primary" onClick={loadItens}>🔄 Atualizar</button>
       </header>
 
-      {/* KPIs */}
+      {/* KPIs - com match status */}
       <div className="kpi-row small">
         <div className={`kpi ${filter === 'todos' ? 'active' : ''}`} onClick={() => { setFilter('todos'); setPage(0) }}>
           <div className="kpi-value">{stats.total}</div><div className="kpi-label">Total</div>
         </div>
-        <div className={`kpi ${filter === 'sem_foto' ? 'active' : ''}`} onClick={() => { setFilter('sem_foto'); setPage(0) }}>
-          <div className={`kpi-value ${stats.sem_foto > 0 ? 'red' : 'green'}`}>{stats.sem_foto}</div><div className="kpi-label">Sem Foto</div>
+        <div className="kpi">
+          <div className="kpi-value green">{stats.com_match}</div><div className="kpi-label">Com Match</div>
+        </div>
+        <div className={`kpi ${filter === 'sem_match' ? 'active' : ''}`} onClick={() => { setFilter('sem_match'); setPage(0) }}>
+          <div className={`kpi-value ${stats.sem_match > 0 ? 'red' : 'green'}`}>{stats.sem_match}</div><div className="kpi-label">Sem Match</div>
         </div>
         <div className={`kpi ${filter === 'sem_desc' ? 'active' : ''}`} onClick={() => { setFilter('sem_desc'); setPage(0) }}>
           <div className={`kpi-value ${stats.sem_desc > 0 ? 'red' : 'green'}`}>{stats.sem_desc}</div><div className="kpi-label">Sem Desc</div>
-        </div>
-        <div className={`kpi ${filter === 'sem_preco' ? 'active' : ''}`} onClick={() => { setFilter('sem_preco'); setPage(0) }}>
-          <div className={`kpi-value ${stats.sem_preco > 0 ? 'red' : 'green'}`}>{stats.sem_preco}</div><div className="kpi-label">Sem Preço</div>
         </div>
       </div>
 
@@ -819,7 +849,7 @@ function ItensPage() {
           <table className="items-table">
             <thead>
               <tr>
-                <th>Imagem</th>
+                <th>Match</th>
                 <th>Nome</th>
                 <th>Restaurante</th>
                 <th>Categoria</th>
@@ -829,9 +859,9 @@ function ItensPage() {
             </thead>
             <tbody>
               {paged.map(item => (
-                <tr key={item.id} className={item.sem_foto || item.sem_desc || item.sem_preco ? 'row-problem' : ''}>
+                <tr key={item.id} className={!item.has_match || item.sem_desc || item.sem_preco ? 'row-problem' : ''}>
                   <td>
-                    {item.imagem_url ? <img src={item.imagem_url} alt="" className="item-thumb" /> : <div className="item-thumb placeholder">📷</div>}
+                    {item.has_match ? <span className="badge badge-success">🔗</span> : <span className="badge badge-danger">❓</span>}
                   </td>
                   <td><strong>{item.nome}</strong></td>
                   <td><span className="badge badge-info">{item.restaurante_nome}</span></td>
@@ -839,10 +869,9 @@ function ItensPage() {
                   <td>{item.precos && item.precos.length > 0 && item.precos[0]?.valor ? `R$ ${item.precos[0].valor.toFixed(2)}` : <span className="text-muted">-</span>}</td>
                   <td>
                     <div className="status-badges">
-                      {item.sem_foto && <span className="badge badge-danger">📷</span>}
                       {item.sem_desc && <span className="badge badge-warning">📝</span>}
                       {item.sem_preco && <span className="badge badge-warning">💰</span>}
-                      {!item.sem_foto && !item.sem_desc && !item.sem_preco && <span className="badge badge-success">✓</span>}
+                      {!item.sem_desc && !item.sem_preco && item.has_match && <span className="badge badge-success">✓</span>}
                     </div>
                   </td>
                 </tr>
