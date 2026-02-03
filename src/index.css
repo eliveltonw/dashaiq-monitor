@@ -368,6 +368,66 @@ body {
   font-weight: 700;
 }
 
+.card-avatar-img {
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  object-fit: cover;
+}
+
+.header-rest {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.header-avatar {
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  object-fit: cover;
+}
+
+.cat-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 160px;
+}
+
+.matches-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.match-item {
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.match-info strong {
+  display: block;
+  margin-bottom: 8px;
+}
+
+.match-details {
+  display: flex;
+  gap: 6px;
+}
+
+.item-details {
+  margin-bottom: 12px;
+  font-size: 13px;
+}
+
+.item-details p {
+  margin-bottom: 4px;
+}
+
 .card-info {
   flex: 1;
 }
